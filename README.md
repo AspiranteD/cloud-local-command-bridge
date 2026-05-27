@@ -1,5 +1,5 @@
-﻿# Cloud-Local Command Bridge
-> **Portfolio context:** Extracted from founder-led production systems — multi-marketplace inventory, orders, and warehouse execution. **[Full portfolio](https://github.com/AspiranteD)** · [aspiranted.github.io](https://aspiranted.github.io)
+# Cloud-Local Command Bridge
+> **Portfolio context:** Extracted from founder-led production systems � multi-marketplace inventory, orders, and warehouse execution. **[Full portfolio](https://github.com/AspiranteD/AspiranteD)** � [aspiranted.github.io](https://aspiranted.github.io)
 
 Production bridge connecting a cloud-hosted low-code platform (Retool) to local backend instances via a shared PostgreSQL queue. Enables remote command execution (extractions, printer control, enrichment) across distributed machines with automatic failover.
 
@@ -7,13 +7,13 @@ Production bridge connecting a cloud-hosted low-code platform (Retool) to local 
 
 ```
 src/
-├── lock/
-│   └── distributed_lock.py   # Exclusive lock with heartbeat + failover
-├── queue/
-│   ├── command_queue.py       # Claim-execute-update command pattern
-│   └── dispatcher.py         # Command routing to handlers
-└── printer/
-    └── printer_discovery.py   # TTL-cached printer detection + heartbeat
++-- lock/
+�   +-- distributed_lock.py   # Exclusive lock with heartbeat + failover
++-- queue/
+�   +-- command_queue.py       # Claim-execute-update command pattern
+�   +-- dispatcher.py         # Command routing to handlers
++-- printer/
+    +-- printer_discovery.py   # TTL-cached printer detection + heartbeat
 ```
 
 ## Key Technical Features
