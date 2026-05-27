@@ -1,141 +1,80 @@
 # Cloud-Local Command Bridge
 
-Distributed command execution pattern for **cloud-to-local communication**. A local agent polls a cloud queue for commands, executes them behind the firewall, and reports results back — no exposed ports required.
+Production bridge connecting a cloud-hosted low-code platform (Retool) to local backend instances via a shared PostgreSQL queue. Enables remote command execution (extractions, printer control, enrichment) across distributed machines with automatic failover.
 
 ## Architecture
 
-```mermaid
-sequenceDiagram
-    participant Dashboard as Cloud Dashboard (Retool)
-    participant DB as Command Queue (DB)
-    participant Poller as Local Poller
-    participant Executor as Command Executor
-    
-    Dashboard->>DB: Insert command (PENDING)
-    loop Every N seconds
-        Poller->>DB: Poll for pending commands
-        DB-->>Poller: Return oldest pending
-    end
-    Poller->>DB: Acknowledge (IN_PROGRESS)
-    Poller->>Executor: Execute command
-    Executor-->>Poller: Return result
-    Poller->>DB: Complete (result)
-    Dashboard->>DB: Read result
+```
+src/
+├── lock/
+│   └── distributed_lock.py   # Exclusive lock with heartbeat + failover
+├── queue/
+│   ├── command_queue.py       # Claim-execute-update command pattern
+│   └── dispatcher.py         # Command routing to handlers
+└── printer/
+    └── printer_discovery.py   # TTL-cached printer detection + heartbeat
 ```
 
-## How It Works
+## Key Technical Features
 
-1. **Cloud side** (e.g., Retool dashboard) inserts a command into a shared database queue
-2. **Local bridge** polls the queue at a configurable interval
-3. Bridge **acquires a distributed lock** to prevent duplicate processing
-4. **Command executor** runs only pre-registered commands (security by design)
-5. Result is written back to the queue for the cloud side to read
-6. **Heartbeat** lets the cloud side know the bridge is alive
+### Distributed Lock (`src/lock/distributed_lock.py`)
 
-## Use Cases
+Ensures exactly one backend instance processes commands at a time:
 
-- Triggering local scripts from a web dashboard
-- Running scraping jobs from Retool without exposing the scraper machine
-- Batch operations on on-premise data from cloud tools
-- Executing maintenance tasks on firewalled servers
+- **Heartbeat-based liveness**: active instance sends heartbeat every 10s
+- **Automatic failover**: if heartbeat stops for 60s, another instance can take over
+- **Same-host fast recovery**: if the same hostname tries to acquire (process restart), shorter 10s timeout
+- **Graceful release**: on shutdown, explicitly releases lock and cancels pending commands
+- **Lock state inspection**: can query current holder and heartbeat age
 
-## Design Decisions
+### Command Queue (`src/queue/command_queue.py`)
 
-### Why Polling (not WebSocket/Webhooks)?
+PostgreSQL-backed command queue with transactional claim semantics:
 
-- **No exposed ports**: The local machine never accepts inbound connections
-- **Firewall-friendly**: Works behind any NAT/firewall — only outbound HTTPS needed
-- **Simple recovery**: If the bridge restarts, it just resumes polling
-- **No infrastructure**: No message broker, no WebSocket server to maintain
+- **Claim-execute-update**: `pending` -> `processing` -> `done`/`error`
+- **SKIP LOCKED**: concurrent workers can poll without double-processing
+- **TTL expiration**: commands older than configurable TTL auto-expire
+- **Requeue on transient failure**: if a command fails due to missing hardware (printer), it returns to `pending` for another worker
+- **Graceful shutdown**: cancels pending commands (excluding transferable ones like print/enrich)
+- **Filtered polling**: print commands use separate polling loop with faster interval
 
-### Why DB-Based Locking?
+### Command Dispatcher (`src/queue/dispatcher.py`)
 
-- Multiple bridge instances can run for high availability
-- Only one instance processes each command (exactly-once semantics)
-- Lock expiry handles crashed instances automatically
-- Same DB used for the queue — no additional infrastructure
+Extensible command routing:
 
-### Why Heartbeat Monitoring?
+- **Handler registration**: `register("command_name", handler_fn)`
+- **Error isolation**: handler exceptions are caught and returned as structured errors
+- **Result normalization**: non-dict returns wrapped automatically
+- **Real-world commands**: start/stop scheduler, run individual extraction jobs, set intervals, update/validate cookies, print labels, enrich items
 
-- Cloud side can detect dead bridges by stale heartbeats
-- Enables alerting when a bridge goes offline
-- Reports useful metrics: uptime, commands processed, current task
+### Printer Discovery (`src/printer/printer_discovery.py`)
 
-## Project Structure
+Handles printer detection across distributed machines:
 
-```
-cloud-local-command-bridge/
-├── src/
-│   ├── poller/          # Polls cloud DB for pending commands
-│   ├── executor/        # Executes commands + registry of allowed commands
-│   ├── locking/         # DB-based distributed lock
-│   └── heartbeat/       # Health monitoring reporter
-├── tests/               # 25+ unit tests (in-memory, no DB needed)
-├── examples/            # Working demo
-├── requirements.txt
-└── README.md
-```
+- **TTL-based caching**: avoids OS-level detection (USB/PowerShell) every poll cycle. Successful detections cached for 60s
+- **Negative cache bypass**: failed detections are never cached (retry immediately)
+- **Printer heartbeat**: registers PC availability in DB so cloud UI can list printers
+- **Cache invalidation**: explicit `invalidate_cache()` on printer errors forces re-detection
+- **Multi-PC support**: any PC with a printer can process print commands via target_pc routing
 
-## Quick Start
+### Concurrency Model
+
+- **Lock holder**: runs command poll (5s), heartbeat (10s), cookie validation (30min)
+- **All instances**: run print poll (2s) independently (no lock needed)
+- **Lock loss detection**: heartbeat loop detects if another instance took over, transitions to standby
+- **Standby re-acquisition**: standby instances retry lock acquisition every 30s
+
+## Testing
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Run tests
-pytest tests/ -v
-
-# Run the demo
-python -m examples.bridge_demo
+python -m pytest tests/ -v
 ```
 
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-All tests use in-memory implementations — no database or network required.
-
-## Example Output
-
-```
-=== Cloud-Local Command Bridge Demo ===
-
-Simulating cloud dashboard enqueueing commands...
-
-Processing: PING (id=cmd-001)
-  ✓ Result: PONG
-
-Processing: STATUS (id=cmd-002)
-  ✓ Result: {'status': 'running', 'platform': 'Windows', ...}
-
-Processing: SCRAPE_PRICES (id=cmd-003)
-  ✓ Result: Scraped 42 items from https://store.example.com
-
---- Heartbeat ---
-  Host: MY-MACHINE
-  Commands processed: 3
-  Uptime: 0.05s
-```
-
-## Extending
-
-Register your own commands:
-
-```python
-from src.executor.command_registry import CommandRegistry
-
-registry = CommandRegistry()
-
-registry.register(
-    "IMPORT_DATA",
-    handler=lambda path: f"Imported {path}",
-    timeout=300.0,
-    description="Import data from a local file",
-)
-```
-
-## License
-
-MIT
+**69 tests** covering:
+- Lock state (held, expired, same-host stale, fresh)
+- Lock acquisition (free, expired holder, same-host restart, active holder)
+- Heartbeat (throttling, loss detection, status update)
+- Command queue (claim, done, error, requeue, cancel, expire, count)
+- Dispatcher (registration, unknown commands, exceptions, real-world patterns)
+- Printer discovery (caching, expiry, invalidation, heartbeat throttling)
