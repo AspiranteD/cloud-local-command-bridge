@@ -1,7 +1,6 @@
 """Tests for printer discovery with TTL cache."""
 import time
 import pytest
-from unittest.mock import MagicMock
 from src.printer.printer_discovery import (
     PrinterDiscovery, PrinterCallbacks, PrinterState,
     CACHE_TTL, HEARTBEAT_INTERVAL,

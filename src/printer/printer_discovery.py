@@ -10,7 +10,7 @@ registers its availability so the cloud UI can list available printers.
 """
 import time
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Callable
 
 
 CACHE_TTL = 60

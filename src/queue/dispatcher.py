@@ -5,7 +5,7 @@ Supports synchronous and async handlers, with extensible
 command registration.
 """
 from dataclasses import dataclass
-from typing import Callable, Optional, Any
+from typing import Callable
 
 
 @dataclass
